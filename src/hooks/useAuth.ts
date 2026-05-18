@@ -112,12 +112,16 @@ export function useAuth() {
 
   async function updateProfile(updates: Partial<Pick<Profile, 'first_name'>>) {
     if (!state.user) return { error: new Error('Not signed in') }
-    const { error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', state.user.id)
-    if (!error) setState(s => ({ ...s, profile: s.profile ? { ...s.profile, ...updates } : s.profile }))
-    return { error }
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', state.user.id)
+      if (!error) setState(s => ({ ...s, profile: s.profile ? { ...s.profile, ...updates } : s.profile }))
+      return { error }
+    } catch (err) {
+      return { error: err instanceof Error ? err : new Error('Network error') }
+    }
   }
 
   return { ...state, signUp, signIn, signOut, resetPassword, updateProfile }
