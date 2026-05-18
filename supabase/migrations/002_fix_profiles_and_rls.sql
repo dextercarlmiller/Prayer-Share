@@ -1,24 +1,26 @@
 -- ============================================================
--- PrayerShare — Full Schema + RLS Policies
--- Run this in your Supabase SQL editor to set up the database.
+-- Migration 002: Add missing profile columns + fix recursive RLS
 -- ============================================================
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- 1. Add first_name and email columns to profiles if they don't exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'first_name'
+  ) THEN
+    ALTER TABLE public.profiles ADD COLUMN first_name TEXT NOT NULL DEFAULT '';
+  END IF;
 
--- ============================================================
--- TABLES
--- ============================================================
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'email'
+  ) THEN
+    ALTER TABLE public.profiles ADD COLUMN email TEXT NOT NULL DEFAULT '';
+  END IF;
+END $$;
 
--- Profiles: extends auth.users (one-to-one)
-CREATE TABLE IF NOT EXISTS public.profiles (
-  id         UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  first_name TEXT NOT NULL DEFAULT '',
-  email      TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Prayer groups
+-- 2. Create missing tables (no-ops if they already exist from schema.sql)
 CREATE TABLE IF NOT EXISTS public.prayer_groups (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name       TEXT NOT NULL,
@@ -26,7 +28,6 @@ CREATE TABLE IF NOT EXISTS public.prayer_groups (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Group membership
 CREATE TABLE IF NOT EXISTS public.group_members (
   id        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id  UUID NOT NULL REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
@@ -36,7 +37,6 @@ CREATE TABLE IF NOT EXISTS public.group_members (
   UNIQUE (group_id, user_id)
 );
 
--- Prayer requests (personal and group-shared)
 CREATE TABLE IF NOT EXISTS public.prayer_requests (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS public.prayer_requests (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Group invitations
 CREATE TABLE IF NOT EXISTS public.group_invites (
   id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id       UUID NOT NULL REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
@@ -60,7 +59,6 @@ CREATE TABLE IF NOT EXISTS public.group_invites (
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Prayed-for events: one record per user per request per day
 CREATE TABLE IF NOT EXISTS public.prayed_for_events (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   request_id UUID NOT NULL REFERENCES public.prayer_requests(id) ON DELETE CASCADE,
@@ -69,7 +67,6 @@ CREATE TABLE IF NOT EXISTS public.prayed_for_events (
   UNIQUE (request_id, user_id, date)
 );
 
--- In-app notifications
 CREATE TABLE IF NOT EXISTS public.notifications (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id    UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -79,85 +76,28 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ============================================================
--- TRIGGERS
--- ============================================================
-
--- Auto-create profile on new user signup
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-BEGIN
-  INSERT INTO public.profiles (id, first_name, email)
-  VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'first_name', ''),
-    COALESCE(NEW.email, '')
-  )
-  ON CONFLICT (id) DO NOTHING;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
-
--- Notify group members when a prayer is marked answered
-CREATE OR REPLACE FUNCTION public.notify_prayer_answered()
-RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE
-  req_title TEXT;
-  member_id UUID;
-BEGIN
-  -- Only fire when is_answered changes to true
-  IF NEW.is_answered = TRUE AND OLD.is_answered = FALSE AND NEW.group_id IS NOT NULL THEN
-    SELECT title INTO req_title FROM public.prayer_requests WHERE id = NEW.id;
-
-    FOR member_id IN
-      SELECT gm.user_id
-      FROM public.group_members gm
-      WHERE gm.group_id = NEW.group_id
-        AND gm.user_id != NEW.user_id
-        AND EXISTS (
-          SELECT 1 FROM public.prayed_for_events pfe
-          WHERE pfe.request_id = NEW.id AND pfe.user_id = gm.user_id
-        )
-    LOOP
-      INSERT INTO public.notifications (user_id, message, request_id)
-      VALUES (member_id, 'A prayer you prayed for was answered: "' || req_title || '"', NEW.id);
-    END LOOP;
-  END IF;
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS on_prayer_answered ON public.prayer_requests;
-CREATE TRIGGER on_prayer_answered
-  AFTER UPDATE ON public.prayer_requests
-  FOR EACH ROW EXECUTE PROCEDURE public.notify_prayer_answered();
-
--- ============================================================
--- ROW LEVEL SECURITY
--- ============================================================
-
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.prayer_groups ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.group_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.prayer_requests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.group_invites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.prayed_for_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
-
--- Helper: returns group IDs for the current user without triggering RLS on group_members.
--- SECURITY DEFINER is required to break the self-referential recursion that would occur
--- if group_members policies queried group_members directly.
+-- 3. Security-definer helper: returns group IDs the current user belongs to.
+--    SECURITY DEFINER bypasses RLS on group_members, breaking the recursion.
 CREATE OR REPLACE FUNCTION public.get_my_group_ids()
 RETURNS SETOF UUID LANGUAGE SQL SECURITY DEFINER STABLE AS $$
   SELECT group_id FROM public.group_members WHERE user_id = auth.uid()
 $$;
 
--- Profiles: readable by self and fellow group members; writable by self only
+-- 4. Enable RLS on new tables
+ALTER TABLE public.prayer_groups      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.group_members      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prayer_requests    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.group_invites      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.prayed_for_events  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications      ENABLE ROW LEVEL SECURITY;
+
+-- 5. Drop old profile policies and recreate (profiles now uses get_my_group_ids)
+DROP POLICY IF EXISTS "profiles_public_read" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_own_write"   ON public.profiles;
+DROP POLICY IF EXISTS "profiles_select"      ON public.profiles;
+DROP POLICY IF EXISTS "profiles_insert"      ON public.profiles;
+DROP POLICY IF EXISTS "profiles_update"      ON public.profiles;
+
 CREATE POLICY "profiles_select" ON public.profiles FOR SELECT USING (
   id = auth.uid()
   OR id IN (
@@ -168,7 +108,33 @@ CREATE POLICY "profiles_select" ON public.profiles FOR SELECT USING (
 CREATE POLICY "profiles_insert" ON public.profiles FOR INSERT WITH CHECK (id = auth.uid());
 CREATE POLICY "profiles_update" ON public.profiles FOR UPDATE USING (id = auth.uid());
 
--- Prayer groups: readable by members; insertable by any authed user
+-- 6. Drop and recreate group_members policies using get_my_group_ids()
+--    to eliminate the self-referential recursion.
+DROP POLICY IF EXISTS "group_members_select" ON public.group_members;
+DROP POLICY IF EXISTS "group_members_insert" ON public.group_members;
+DROP POLICY IF EXISTS "group_members_delete" ON public.group_members;
+
+CREATE POLICY "group_members_select" ON public.group_members FOR SELECT USING (
+  group_id IN (SELECT public.get_my_group_ids())
+);
+CREATE POLICY "group_members_insert" ON public.group_members FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "group_members_delete" ON public.group_members FOR DELETE USING (
+  user_id = auth.uid()
+  OR group_id IN (SELECT public.get_my_group_ids())
+    AND EXISTS (
+      SELECT 1 FROM public.group_members
+      WHERE group_id = group_members.group_id
+        AND user_id = auth.uid()
+        AND role = 'admin'
+    )
+);
+
+-- 7. Remaining table policies
+DROP POLICY IF EXISTS "prayer_groups_select" ON public.prayer_groups;
+DROP POLICY IF EXISTS "prayer_groups_insert" ON public.prayer_groups;
+DROP POLICY IF EXISTS "prayer_groups_update" ON public.prayer_groups;
+DROP POLICY IF EXISTS "prayer_groups_delete" ON public.prayer_groups;
+
 CREATE POLICY "prayer_groups_select" ON public.prayer_groups FOR SELECT USING (
   id IN (SELECT public.get_my_group_ids())
 );
@@ -176,26 +142,11 @@ CREATE POLICY "prayer_groups_insert" ON public.prayer_groups FOR INSERT WITH CHE
 CREATE POLICY "prayer_groups_update" ON public.prayer_groups FOR UPDATE USING (created_by = auth.uid());
 CREATE POLICY "prayer_groups_delete" ON public.prayer_groups FOR DELETE USING (created_by = auth.uid());
 
--- Group members: readable by fellow members; admins can delete.
--- Uses get_my_group_ids() to avoid infinite recursion (policy cannot query itself).
-CREATE POLICY "group_members_select" ON public.group_members FOR SELECT USING (
-  group_id IN (SELECT public.get_my_group_ids())
-);
-CREATE POLICY "group_members_insert" ON public.group_members FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
-CREATE POLICY "group_members_delete" ON public.group_members FOR DELETE USING (
-  user_id = auth.uid()
-  OR (
-    group_id IN (SELECT public.get_my_group_ids())
-    AND EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_id = group_members.group_id
-        AND user_id = auth.uid()
-        AND role = 'admin'
-    )
-  )
-);
+DROP POLICY IF EXISTS "prayer_requests_select" ON public.prayer_requests;
+DROP POLICY IF EXISTS "prayer_requests_insert" ON public.prayer_requests;
+DROP POLICY IF EXISTS "prayer_requests_update" ON public.prayer_requests;
+DROP POLICY IF EXISTS "prayer_requests_delete" ON public.prayer_requests;
 
--- Prayer requests: personal ones owned by user; group ones visible to members
 CREATE POLICY "prayer_requests_select" ON public.prayer_requests FOR SELECT USING (
   user_id = auth.uid()
   OR (group_id IS NOT NULL AND group_id IN (SELECT public.get_my_group_ids()))
@@ -219,7 +170,10 @@ CREATE POLICY "prayer_requests_delete" ON public.prayer_requests FOR DELETE USIN
   )
 );
 
--- Group invites: created_by can read/write; anyone can read by token (for accept flow)
+DROP POLICY IF EXISTS "group_invites_select" ON public.group_invites;
+DROP POLICY IF EXISTS "group_invites_insert" ON public.group_invites;
+DROP POLICY IF EXISTS "group_invites_update" ON public.group_invites;
+
 CREATE POLICY "group_invites_select" ON public.group_invites FOR SELECT USING (
   invited_by = auth.uid()
   OR group_id IN (SELECT public.get_my_group_ids())
@@ -230,7 +184,10 @@ CREATE POLICY "group_invites_insert" ON public.group_invites FOR INSERT WITH CHE
 );
 CREATE POLICY "group_invites_update" ON public.group_invites FOR UPDATE USING (auth.uid() IS NOT NULL);
 
--- Prayed-for events: readable by any group member; writable only as yourself
+DROP POLICY IF EXISTS "prayed_for_events_select" ON public.prayed_for_events;
+DROP POLICY IF EXISTS "prayed_for_events_insert" ON public.prayed_for_events;
+DROP POLICY IF EXISTS "prayed_for_events_delete" ON public.prayed_for_events;
+
 CREATE POLICY "prayed_for_events_select" ON public.prayed_for_events FOR SELECT USING (
   user_id = auth.uid()
   OR request_id IN (
@@ -242,15 +199,30 @@ CREATE POLICY "prayed_for_events_select" ON public.prayed_for_events FOR SELECT 
 CREATE POLICY "prayed_for_events_insert" ON public.prayed_for_events FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY "prayed_for_events_delete" ON public.prayed_for_events FOR DELETE USING (user_id = auth.uid());
 
--- Notifications: private to each user
+DROP POLICY IF EXISTS "notifications_select" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_update" ON public.notifications;
+DROP POLICY IF EXISTS "notifications_delete" ON public.notifications;
+
 CREATE POLICY "notifications_select" ON public.notifications FOR SELECT USING (user_id = auth.uid());
 CREATE POLICY "notifications_update" ON public.notifications FOR UPDATE USING (user_id = auth.uid());
 CREATE POLICY "notifications_delete" ON public.notifications FOR DELETE USING (user_id = auth.uid());
 
--- ============================================================
--- INDEXES
--- ============================================================
+-- 8. Update handle_new_user trigger to populate first_name and email
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  INSERT INTO public.profiles (id, first_name, email)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'first_name', ''),
+    COALESCE(NEW.email, '')
+  )
+  ON CONFLICT (id) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
 
+-- 9. Indexes for new tables
 CREATE INDEX IF NOT EXISTS idx_prayer_requests_user_id   ON public.prayer_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_prayer_requests_group_id  ON public.prayer_requests(group_id);
 CREATE INDEX IF NOT EXISTS idx_prayer_requests_answered  ON public.prayer_requests(is_answered);
