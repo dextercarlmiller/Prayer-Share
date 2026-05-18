@@ -4,7 +4,7 @@ import { LoadingSpinner } from '../components/LoadingSpinner'
 import { useAuthContext } from '../context/AuthContext'
 
 export function Account() {
-  const { profile, user, updateProfile, signOut } = useAuthContext()
+  const { profile, user, profileError, updateProfile, signOut } = useAuthContext()
   const [firstName, setFirstName] = useState(profile?.first_name ?? '')
   useEffect(() => { setFirstName(profile?.first_name ?? '') }, [profile])
   const [saving, setSaving] = useState(false)
@@ -19,7 +19,11 @@ export function Account() {
     setSaveError(null)
     try {
       const { error } = await updateProfile({ first_name: firstName.trim() })
-      if (error) setSaveError('Could not save changes.')
+      if (error) setSaveError(
+        (error as { message?: string }).message
+          ? `Could not save changes: ${(error as { message?: string }).message}`
+          : 'Could not save changes.'
+      )
       else setSavedMsg('Changes saved.')
     } catch {
       setSaveError('Could not save changes.')
@@ -38,6 +42,10 @@ export function Account() {
       <div className="mb-6">
         <h1 className="font-serif text-2xl font-semibold text-stone-800">Account</h1>
       </div>
+
+      {profileError && (
+        <p className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{profileError}</p>
+      )}
 
       <section className="mb-8 max-w-md">
         <h2 className="mb-4 font-serif text-lg font-medium text-stone-700">Your details</h2>
