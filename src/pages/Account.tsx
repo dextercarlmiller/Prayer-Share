@@ -17,10 +17,15 @@ export function Account() {
     setSaving(true)
     setSavedMsg(null)
     setSaveError(null)
-    const { error } = await updateProfile({ first_name: firstName.trim() })
-    setSaving(false)
-    if (error) setSaveError('Could not save changes.')
-    else setSavedMsg('Changes saved.')
+    try {
+      const { error } = await updateProfile({ first_name: firstName.trim() })
+      if (error) setSaveError('Could not save changes.')
+      else setSavedMsg('Changes saved.')
+    } catch {
+      setSaveError('Could not save changes.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleSignOut() {
