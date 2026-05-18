@@ -35,19 +35,46 @@ export function useAuth() {
   }, [])
 
   async function loadProfile(userId: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .single()
-    setState(s => ({ ...s, profile: data, loading: false }))
+
+    if (data) {
+      setState(s => ({ ...s, profile: data, loading: false }))
+      return
+    }
+
+    // Profile missing (trigger may not have run) — create it now
+    if (error?.code === 'PGRST116') {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: created } = await supabase
+          .from('profiles')
+          .upsert({
+            id: userId,
+            first_name: (user.user_metadata?.first_name as string) ?? '',
+            email: user.email ?? '',
+          })
+          .select()
+          .single()
+        setState(s => ({ ...s, profile: created, loading: false }))
+        return
+      }
+    }
+
+    setState(s => ({ ...s, profile: null, loading: false }))
   }
 
   async function signUp(email: string, password: string, firstName: string) {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { first_name: firstName } },
+      options: {
+        data: { first_name: firstName },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
     })
     return { error }
   }

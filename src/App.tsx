@@ -7,6 +7,7 @@ import { Landing } from './pages/Landing'
 import { Login } from './pages/Login'
 import { Signup } from './pages/Signup'
 import { ResetPassword } from './pages/ResetPassword'
+import { AuthCallback } from './pages/AuthCallback'
 import { MyList } from './pages/MyList'
 import { Groups } from './pages/Groups'
 import { NewGroup } from './pages/NewGroup'
@@ -26,6 +27,7 @@ function AppRoutes() {
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/invite/:token" element={<InviteAccept />} />
 
         <Route path="/my-list" element={<ProtectedRoute><MyList /></ProtectedRoute>} />
