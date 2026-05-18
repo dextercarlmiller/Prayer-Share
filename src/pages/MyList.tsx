@@ -5,8 +5,10 @@ import { AddPrayerForm } from '../components/AddPrayerForm'
 import { EmptyState } from '../components/EmptyState'
 import { PageLoader } from '../components/LoadingSpinner'
 import { usePrayerRequests } from '../hooks/usePrayerRequests'
+import { useAuthContext } from '../context/AuthContext'
 
 export function MyList() {
+  const { profileError } = useAuthContext()
   const { requests, loading, error, addRequest, markAnswered, archiveRequest, prayFor } = usePrayerRequests()
   const [formOpen, setFormOpen] = useState(false)
 
@@ -26,10 +28,10 @@ export function MyList() {
         </button>
       </div>
 
-      {loading && <PageLoader />}
+      {(loading) && <PageLoader />}
 
-      {!loading && error && (
-        <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
+      {!loading && (profileError || error) && (
+        <p className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{profileError ?? error}</p>
       )}
 
       {!loading && !error && requests.length === 0 && (
