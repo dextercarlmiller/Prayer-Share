@@ -8,6 +8,7 @@ interface AuthState {
   user: User | null
   profile: Profile | null
   loading: boolean
+  profileError: string | null
 }
 
 export function useAuth() {
@@ -16,6 +17,7 @@ export function useAuth() {
     user: null,
     profile: null,
     loading: true,
+    profileError: null,
   })
 
   useEffect(() => {
@@ -26,7 +28,7 @@ export function useAuth() {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setState(s => ({ ...s, session, user: session?.user ?? null }))
+      setState(s => ({ ...s, session, user: session?.user ?? null, profileError: null }))
       if (session?.user) loadProfile(session.user.id)
       else setState(s => ({ ...s, profile: null, loading: false }))
     })
@@ -42,7 +44,7 @@ export function useAuth() {
       .single()
 
     if (data) {
-      setState(s => ({ ...s, profile: data, loading: false }))
+      setState(s => ({ ...s, profile: data, loading: false, profileError: null }))
       return
     }
 
@@ -50,7 +52,7 @@ export function useAuth() {
     if (error?.code === 'PGRST116') {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        const { data: created } = await supabase
+        const { data: created, error: upsertError } = await supabase
           .from('profiles')
           .upsert({
             id: userId,
@@ -59,12 +61,25 @@ export function useAuth() {
           })
           .select()
           .single()
-        setState(s => ({ ...s, profile: created, loading: false }))
+        if (upsertError) {
+          setState(s => ({
+            ...s,
+            profile: null,
+            loading: false,
+            profileError: 'Database not set up. Run supabase/schema.sql in your Supabase SQL Editor.',
+          }))
+          return
+        }
+        setState(s => ({ ...s, profile: created, loading: false, profileError: null }))
         return
       }
     }
 
-    setState(s => ({ ...s, profile: null, loading: false }))
+    // Table doesn't exist or another DB error
+    const dbError = error?.code === '42P01'
+      ? 'Database not set up. Run supabase/schema.sql in your Supabase SQL Editor.'
+      : (error?.message ?? null)
+    setState(s => ({ ...s, profile: null, loading: false, profileError: dbError }))
   }
 
   async function signUp(email: string, password: string, firstName: string) {
