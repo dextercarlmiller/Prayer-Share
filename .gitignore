@@ -23,3 +23,6 @@ yarn-error.*
 
 # Vite
 .vite/
+
+# Wrangler
+.wrangler/
