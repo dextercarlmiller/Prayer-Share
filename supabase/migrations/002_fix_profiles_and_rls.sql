@@ -63,8 +63,7 @@ CREATE TABLE IF NOT EXISTS public.prayed_for_events (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   request_id UUID NOT NULL REFERENCES public.prayer_requests(id) ON DELETE CASCADE,
   user_id    UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  date       DATE NOT NULL DEFAULT CURRENT_DATE,
-  UNIQUE (request_id, user_id, date)
+  date       DATE NOT NULL DEFAULT CURRENT_DATE
 );
 
 CREATE TABLE IF NOT EXISTS public.notifications (
@@ -136,7 +135,7 @@ DROP POLICY IF EXISTS "prayer_groups_update" ON public.prayer_groups;
 DROP POLICY IF EXISTS "prayer_groups_delete" ON public.prayer_groups;
 
 CREATE POLICY "prayer_groups_select" ON public.prayer_groups FOR SELECT USING (
-  id IN (SELECT public.get_my_group_ids())
+  created_by = auth.uid() OR id IN (SELECT public.get_my_group_ids())
 );
 CREATE POLICY "prayer_groups_insert" ON public.prayer_groups FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY "prayer_groups_update" ON public.prayer_groups FOR UPDATE USING (created_by = auth.uid());

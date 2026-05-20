@@ -81,11 +81,13 @@ export function useGroups() {
     if (error) return { error, group: null }
 
     // Creator becomes admin member
-    await supabase.from('group_members').insert({
+    const { error: memberError } = await supabase.from('group_members').insert({
       group_id: group.id,
       user_id: user.id,
       role: 'admin',
     })
+
+    if (memberError) return { error: memberError, group: null }
 
     await fetch()
     return { error: null, group }

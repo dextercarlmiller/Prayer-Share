@@ -26,7 +26,7 @@ export function PrayerCard({ request, showAuthor = false, onPrayFor, onMarkAnswe
     : null
 
   async function handlePrayFor() {
-    if (request.user_has_prayed_today || prayingLoading) return
+    if (prayingLoading) return
     setPrayingLoading(true)
     await onPrayFor(request.id)
     setPrayingLoading(false)
@@ -68,13 +68,13 @@ export function PrayerCard({ request, showAuthor = false, onPrayFor, onMarkAnswe
       <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={handlePrayFor}
-          disabled={request.user_has_prayed_today || prayingLoading}
+          disabled={prayingLoading}
           className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-all ${
             request.user_has_prayed_today
-              ? 'cursor-default bg-amber-100 text-amber-700'
+              ? 'bg-amber-100 text-amber-700 border border-amber-200 hover:bg-amber-200'
               : 'bg-white text-stone-600 hover:bg-amber-50 hover:text-amber-700 border border-amber-200'
           }`}
-          aria-label={request.user_has_prayed_today ? 'Already prayed for today' : 'I prayed for this'}
+          aria-label="I prayed for this"
         >
           {prayingLoading ? (
             <LoadingSpinner size="sm" />
