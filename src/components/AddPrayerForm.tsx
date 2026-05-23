@@ -66,6 +66,7 @@ export function AddPrayerForm({ isOpen, onClose, onAdd }: AddPrayerFormProps) {
             onChange={e => setDetails(e.target.value)}
             placeholder="A little more context, if you'd like…"
             rows={4}
+            maxLength={2000}
             className="w-full resize-none rounded-xl border border-amber-200 bg-white px-4 py-3 text-stone-800 placeholder-stone-400 transition-colors focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
           />
         </div>

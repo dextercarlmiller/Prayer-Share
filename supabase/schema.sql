@@ -38,26 +38,40 @@ CREATE TABLE IF NOT EXISTS public.group_members (
 
 -- Prayer requests (personal and group-shared)
 CREATE TABLE IF NOT EXISTS public.prayer_requests (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  group_id    UUID REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
-  title       TEXT NOT NULL,
-  details     TEXT,
-  is_answered BOOLEAN NOT NULL DEFAULT FALSE,
-  answered_at TIMESTAMPTZ,
-  is_archived BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id           UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  group_id          UUID        REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
+  title             TEXT        NOT NULL,
+  details           TEXT,
+  details_encrypted TEXT,
+  is_answered       BOOLEAN     NOT NULL DEFAULT FALSE,
+  answered_at       TIMESTAMPTZ,
+  is_archived       BOOLEAN     NOT NULL DEFAULT FALSE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Group invitations
 CREATE TABLE IF NOT EXISTS public.group_invites (
-  id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  group_id       UUID NOT NULL REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
-  invited_email  TEXT NOT NULL,
-  invited_by     UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  token          TEXT NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(32), 'hex'),
-  accepted       BOOLEAN NOT NULL DEFAULT FALSE,
+  id             UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  group_id       UUID        NOT NULL REFERENCES public.prayer_groups(id) ON DELETE CASCADE,
+  invited_email  TEXT        NOT NULL,
+  invited_by     UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  token          TEXT        NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(32), 'hex'),
+  accepted       BOOLEAN     NOT NULL DEFAULT FALSE,
+  expires_at     TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Audit log: append-only record of sensitive mutations
+CREATE TABLE IF NOT EXISTS public.audit_log (
+  id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  actor_id   UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  action     TEXT        NOT NULL,
+  table_name TEXT        NOT NULL,
+  record_id  UUID,
+  old_data   JSONB,
+  new_data   JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Prayed-for events: one record per prayer action (multiple per day allowed)
@@ -136,6 +150,58 @@ CREATE TRIGGER on_prayer_answered
   AFTER UPDATE ON public.prayer_requests
   FOR EACH ROW EXECUTE PROCEDURE public.notify_prayer_answered();
 
+-- Encrypt prayer details on insert/update when app.encryption_key is configured
+CREATE OR REPLACE FUNCTION public.encrypt_prayer_details_trigger()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  enc_key TEXT := current_setting('app.encryption_key', true);
+BEGIN
+  IF enc_key IS NOT NULL AND enc_key <> '' AND NEW.details IS NOT NULL THEN
+    NEW.details_encrypted := encode(pgp_sym_encrypt(NEW.details, enc_key), 'base64');
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS encrypt_prayer_details ON public.prayer_requests;
+CREATE TRIGGER encrypt_prayer_details
+  BEFORE INSERT OR UPDATE OF details ON public.prayer_requests
+  FOR EACH ROW EXECUTE FUNCTION public.encrypt_prayer_details_trigger();
+
+-- Audit logging for sensitive tables
+CREATE OR REPLACE FUNCTION public.audit_trigger()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO public.audit_log (actor_id, action, table_name, record_id, new_data)
+    VALUES (auth.uid(), 'INSERT', TG_TABLE_NAME, NEW.id, to_jsonb(NEW));
+  ELSIF TG_OP = 'UPDATE' THEN
+    INSERT INTO public.audit_log (actor_id, action, table_name, record_id, old_data, new_data)
+    VALUES (auth.uid(), 'UPDATE', TG_TABLE_NAME, NEW.id, to_jsonb(OLD), to_jsonb(NEW));
+  ELSIF TG_OP = 'DELETE' THEN
+    INSERT INTO public.audit_log (actor_id, action, table_name, record_id, old_data)
+    VALUES (auth.uid(), 'DELETE', TG_TABLE_NAME, OLD.id, to_jsonb(OLD));
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS audit_group_members  ON public.group_members;
+DROP TRIGGER IF EXISTS audit_group_invites  ON public.group_invites;
+DROP TRIGGER IF EXISTS audit_prayer_groups  ON public.prayer_groups;
+
+CREATE TRIGGER audit_group_members
+  AFTER INSERT OR UPDATE OR DELETE ON public.group_members
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
+
+CREATE TRIGGER audit_group_invites
+  AFTER INSERT OR UPDATE OR DELETE ON public.group_invites
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
+
+CREATE TRIGGER audit_prayer_groups
+  AFTER INSERT OR UPDATE OR DELETE ON public.prayer_groups
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger();
+
 -- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
@@ -147,6 +213,10 @@ ALTER TABLE public.prayer_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prayed_for_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
+
+-- Audit log: actors may only read their own entries
+CREATE POLICY "audit_log_select" ON public.audit_log FOR SELECT USING (actor_id = auth.uid());
 
 -- Helper: returns group IDs for the current user without triggering RLS on group_members.
 -- SECURITY DEFINER is required to break the self-referential recursion that would occur
@@ -218,16 +288,15 @@ CREATE POLICY "prayer_requests_delete" ON public.prayer_requests FOR DELETE USIN
   )
 );
 
--- Group invites: created_by can read/write; anyone can read by token (for accept flow)
+-- Group invites: inviter and group members may list; token-based accept goes through RPC
 CREATE POLICY "group_invites_select" ON public.group_invites FOR SELECT USING (
   invited_by = auth.uid()
   OR group_id IN (SELECT public.get_my_group_ids())
-  OR TRUE  -- allow reading by token for unauthenticated invite accept
 );
 CREATE POLICY "group_invites_insert" ON public.group_invites FOR INSERT WITH CHECK (
   group_id IN (SELECT public.get_my_group_ids())
 );
-CREATE POLICY "group_invites_update" ON public.group_invites FOR UPDATE USING (auth.uid() IS NOT NULL);
+-- No direct UPDATE policy: accept_invite_by_token() SECURITY DEFINER handles all updates
 
 -- Prayed-for events: readable by any group member; writable only as yourself
 CREATE POLICY "prayed_for_events_select" ON public.prayed_for_events FOR SELECT USING (
@@ -247,6 +316,63 @@ CREATE POLICY "notifications_update" ON public.notifications FOR UPDATE USING (u
 CREATE POLICY "notifications_delete" ON public.notifications FOR DELETE USING (user_id = auth.uid());
 
 -- ============================================================
+-- SECURE RPC FUNCTIONS
+-- ============================================================
+
+-- Validates an invite token server-side and atomically joins the group.
+-- SECURITY DEFINER bypasses RLS so token lookup works without OR TRUE on the table policy.
+CREATE OR REPLACE FUNCTION public.accept_invite_by_token(p_token TEXT)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_invite  public.group_invites%ROWTYPE;
+  v_user_id UUID := auth.uid();
+  v_name    TEXT;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('error', 'not_authenticated');
+  END IF;
+
+  SELECT * INTO v_invite
+  FROM public.group_invites
+  WHERE token = p_token AND accepted = FALSE AND expires_at > NOW();
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('error', 'invalid_or_expired');
+  END IF;
+
+  SELECT name INTO v_name FROM public.prayer_groups WHERE id = v_invite.group_id;
+
+  IF EXISTS (
+    SELECT 1 FROM public.group_members
+    WHERE group_id = v_invite.group_id AND user_id = v_user_id
+  ) THEN
+    RETURN jsonb_build_object('status', 'already_member', 'group_name', v_name);
+  END IF;
+
+  INSERT INTO public.group_members (group_id, user_id, role)
+  VALUES (v_invite.group_id, v_user_id, 'member');
+
+  UPDATE public.group_invites SET accepted = TRUE WHERE id = v_invite.id;
+
+  RETURN jsonb_build_object('status', 'joined', 'group_name', v_name, 'group_id', v_invite.group_id);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.accept_invite_by_token(TEXT) TO authenticated;
+
+-- SECURITY DEFINER encrypt/decrypt helpers — key never leaves the server.
+-- Set the key first: ALTER DATABASE postgres SET app.encryption_key = '<hex key>';
+CREATE OR REPLACE FUNCTION public.encrypt_text(plaintext TEXT)
+RETURNS TEXT LANGUAGE SQL SECURITY DEFINER STABLE SET search_path = public AS $$
+  SELECT encode(pgp_sym_encrypt(plaintext, current_setting('app.encryption_key', true)), 'base64')
+$$;
+
+CREATE OR REPLACE FUNCTION public.decrypt_text(ciphertext TEXT)
+RETURNS TEXT LANGUAGE SQL SECURITY DEFINER STABLE SET search_path = public AS $$
+  SELECT pgp_sym_decrypt(decode(ciphertext, 'base64'), current_setting('app.encryption_key', true))
+$$;
+
+-- ============================================================
 -- INDEXES
 -- ============================================================
 
@@ -261,3 +387,6 @@ CREATE INDEX IF NOT EXISTS idx_prayed_for_events_request ON public.prayed_for_ev
 CREATE INDEX IF NOT EXISTS idx_prayed_for_events_user    ON public.prayed_for_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_group_invites_token       ON public.group_invites(token);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id     ON public.notifications(user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_group_invites_expires_at  ON public.group_invites(expires_at) WHERE accepted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor           ON public.audit_log(actor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_table           ON public.audit_log(table_name, record_id);

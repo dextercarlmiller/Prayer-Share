@@ -4,6 +4,15 @@ import { supabase } from '../lib/supabase'
 import { useAuthContext } from '../context/AuthContext'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
+function validatePassword(password: string): string | null {
+  if (password.length < 12) return 'Password must be at least 12 characters.'
+  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.'
+  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.'
+  if (!/[0-9]/.test(password)) return 'Password must include at least one number.'
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Password must include at least one special character.'
+  return null
+}
+
 export function ResetPassword() {
   const { resetPassword } = useAuthContext()
   const navigate = useNavigate()
@@ -57,7 +66,8 @@ export function ResetPassword() {
 
   async function handleSetPassword(e: FormEvent) {
     e.preventDefault()
-    if (password.length < 8) { setSetError('Password must be at least 8 characters.'); return }
+    const pwError = validatePassword(password)
+    if (pwError) { setSetError(pwError); return }
     if (password !== confirm) { setSetError('Passwords do not match.'); return }
     setSetLoading(true)
     setSetError(null)
@@ -87,7 +97,7 @@ export function ResetPassword() {
           </div>
           <form onSubmit={handleSetPassword} className="rounded-2xl border border-amber-200 bg-cream p-6 shadow-sm">
             <h1 className="mb-1 font-serif text-xl font-semibold text-stone-800">Set a new password</h1>
-            <p className="mb-5 text-sm text-stone-500">Choose a password of at least 8 characters.</p>
+            <p className="mb-5 text-sm text-stone-500">At least 12 characters with uppercase, lowercase, a number, and a symbol.</p>
 
             <div className="mb-4">
               <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-stone-700">New password</label>
@@ -97,7 +107,7 @@ export function ResetPassword() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-                minLength={8}
+                minLength={12}
                 autoComplete="new-password"
                 className="w-full rounded-xl border border-amber-200 bg-white px-4 py-3 text-stone-800 placeholder-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
               />
@@ -110,7 +120,7 @@ export function ResetPassword() {
                 value={confirm}
                 onChange={e => setConfirm(e.target.value)}
                 required
-                minLength={8}
+                minLength={12}
                 autoComplete="new-password"
                 className="w-full rounded-xl border border-amber-200 bg-white px-4 py-3 text-stone-800 placeholder-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
               />
