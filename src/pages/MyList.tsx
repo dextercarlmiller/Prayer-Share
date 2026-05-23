@@ -8,8 +8,8 @@ import { usePrayerRequests } from '../hooks/usePrayerRequests'
 import { useAuthContext } from '../context/AuthContext'
 
 export function MyList() {
-  const { profileError } = useAuthContext()
-  const { requests, loading, error, addRequest, markAnswered, archiveRequest, prayFor } = usePrayerRequests()
+  const { user, profileError } = useAuthContext()
+  const { requests, loading, error, addRequest, markAnswered, updateStatus, archiveRequest, prayFor } = usePrayerRequests()
   const [formOpen, setFormOpen] = useState(false)
 
   return (
@@ -55,9 +55,11 @@ export function MyList() {
             <li key={r.id}>
               <PrayerCard
                 request={r}
+                currentUserId={user?.id}
                 onPrayFor={prayFor}
                 onMarkAnswered={markAnswered}
                 onArchive={archiveRequest}
+                onUpdateStatus={updateStatus}
               />
             </li>
           ))}

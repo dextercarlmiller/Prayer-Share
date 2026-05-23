@@ -5,6 +5,8 @@ export interface Profile {
   created_at: string
 }
 
+export type PrayerStatus = 'praying' | 'answered' | 'ongoing' | 'entrusted'
+
 export interface PrayerRequest {
   id: string
   user_id: string
@@ -15,6 +17,15 @@ export interface PrayerRequest {
   answered_at: string | null
   is_archived: boolean
   created_at: string
+  // Status system
+  status?: PrayerStatus
+  pray_count?: number
+  answered_note?: string | null
+  is_anonymous?: boolean
+  category?: string | null
+  expires_at?: string | null
+  verse?: string | null
+  // Joined / enriched
   profiles?: Pick<Profile, 'id' | 'first_name'>
   prayed_for_count?: number
   user_has_prayed_today?: boolean
@@ -55,6 +66,14 @@ export interface PrayedForEvent {
   request_id: string
   user_id: string
   date: string
+}
+
+export interface PrayerInteraction {
+  id: string
+  prayer_id: string
+  user_id: string
+  prayed_at: string
+  prayed_date: string
 }
 
 export interface Notification {
