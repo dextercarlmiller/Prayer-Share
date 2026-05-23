@@ -8,13 +8,15 @@ import { EmptyState } from '../components/EmptyState'
 import { PageLoader } from '../components/LoadingSpinner'
 import { usePrayerRequests } from '../hooks/usePrayerRequests'
 import { useGroups, useGroupInvites, useGroupRole } from '../hooks/useGroups'
+import { useAuthContext } from '../context/AuthContext'
 
 export function GroupView() {
   const { id } = useParams<{ id: string }>()
   const groupId = id ?? ''
+  const { user } = useAuthContext()
   const { groups, loading: groupsLoading, inviteMember } = useGroups()
   const group = groups.find(g => g.id === groupId)
-  const { requests, loading, error, addRequest, markAnswered, archiveRequest, prayFor } = usePrayerRequests({ groupId })
+  const { requests, loading, error, addRequest, markAnswered, updateStatus, archiveRequest, prayFor } = usePrayerRequests({ groupId })
   const { invites } = useGroupInvites(groupId)
   const role = useGroupRole(groupId)
 
@@ -83,9 +85,11 @@ export function GroupView() {
               <PrayerCard
                 request={r}
                 showAuthor
+                currentUserId={user?.id}
                 onPrayFor={prayFor}
                 onMarkAnswered={markAnswered}
                 onArchive={archiveRequest}
+                onUpdateStatus={updateStatus}
               />
             </li>
           ))}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { PrayerRequest } from '../types'
+import { PrayerRequest, PrayerStatus } from '../types'
 
 interface UsePrayerRequestsOptions {
   groupId?: string
@@ -54,30 +54,20 @@ export function usePrayerRequests(options: UsePrayerRequestsOptions = {}) {
 
       const ids = rows.map(r => r.id)
 
-      // Fetch all prayed_for events for these requests
-      const [allEventsRes, todayEventsRes] = await Promise.all([
-        supabase
-          .from('prayed_for_events')
-          .select('request_id')
-          .in('request_id', ids),
-        supabase
-          .from('prayed_for_events')
-          .select('request_id')
-          .in('request_id', ids)
-          .eq('user_id', user.id)
-          .eq('date', today),
-      ])
+      // Check prayer_interactions for today's activity (new system)
+      const todayInteractionsRes = await supabase
+        .from('prayer_interactions')
+        .select('prayer_id')
+        .in('prayer_id', ids)
+        .eq('user_id', user.id)
+        .eq('prayed_date', today)
 
-      const countMap: Record<string, number> = {}
-      for (const row of allEventsRes.data ?? []) {
-        countMap[row.request_id] = (countMap[row.request_id] ?? 0) + 1
-      }
-
-      const todaySet = new Set((todayEventsRes.data ?? []).map(r => r.request_id))
+      const todaySet = new Set((todayInteractionsRes.data ?? []).map(r => r.prayer_id))
 
       const enriched: PrayerRequest[] = rows.map(r => ({
         ...r,
-        prayed_for_count: countMap[r.id] ?? 0,
+        // pray_count comes directly from the prayer_requests column (maintained by trigger)
+        prayed_for_count: r.pray_count ?? 0,
         user_has_prayed_today: todaySet.has(r.id),
       }))
 
@@ -110,9 +100,43 @@ export function usePrayerRequests(options: UsePrayerRequestsOptions = {}) {
   async function markAnswered(id: string) {
     const { error } = await supabase
       .from('prayer_requests')
-      .update({ is_answered: true, answered_at: new Date().toISOString() })
+      .update({ is_answered: true, answered_at: new Date().toISOString(), status: 'answered' })
       .eq('id', id)
     if (!error) await fetch()
+    return { error }
+  }
+
+  async function updateStatus(id: string, status: PrayerStatus, answeredNote?: string) {
+    const updates: Record<string, unknown> = { status }
+    if (status === 'answered') {
+      updates.is_answered = true
+      updates.answered_at = new Date().toISOString()
+      if (answeredNote) updates.answered_note = answeredNote
+    }
+
+    const { error } = await supabase
+      .from('prayer_requests')
+      .update(updates)
+      .eq('id', id)
+
+    if (!error) {
+      setRequests(prev =>
+        prev.map(r =>
+          r.id === id
+            ? {
+                ...r,
+                status,
+                ...(status === 'answered' ? {
+                  is_answered: true,
+                  answered_at: new Date().toISOString(),
+                  answered_note: answeredNote ?? r.answered_note,
+                } : {}),
+              }
+            : r
+        )
+      )
+    }
+
     return { error }
   }
 
@@ -130,17 +154,39 @@ export function usePrayerRequests(options: UsePrayerRequestsOptions = {}) {
     if (!user) return { error: new Error('Not signed in') }
 
     const today = new Date().toISOString().split('T')[0]
-    const { error } = await supabase.from('prayed_for_events').insert({
-      request_id: requestId,
+
+    // Optimistic update first
+    setRequests(prev =>
+      prev.map(r =>
+        r.id === requestId
+          ? {
+              ...r,
+              pray_count: (r.pray_count ?? 0) + 1,
+              prayed_for_count: (r.prayed_for_count ?? 0) + 1,
+              user_has_prayed_today: true,
+            }
+          : r
+      )
+    )
+
+    // Insert into prayer_interactions (trigger increments pray_count in DB)
+    const { error } = await supabase.from('prayer_interactions').insert({
+      prayer_id: requestId,
       user_id: user.id,
-      date: today,
+      prayed_date: today,
     })
 
-    if (!error) {
+    // If insert failed (e.g. already prayed today), revert optimistic update
+    if (error) {
       setRequests(prev =>
         prev.map(r =>
           r.id === requestId
-            ? { ...r, prayed_for_count: (r.prayed_for_count ?? 0) + 1, user_has_prayed_today: true }
+            ? {
+                ...r,
+                pray_count: Math.max(0, (r.pray_count ?? 0) - 1),
+                prayed_for_count: Math.max(0, (r.prayed_for_count ?? 0) - 1),
+                user_has_prayed_today: false,
+              }
             : r
         )
       )
@@ -149,5 +195,15 @@ export function usePrayerRequests(options: UsePrayerRequestsOptions = {}) {
     return { error }
   }
 
-  return { requests, loading, error, refetch: fetch, addRequest, markAnswered, archiveRequest, prayFor }
+  return {
+    requests,
+    loading,
+    error,
+    refetch: fetch,
+    addRequest,
+    markAnswered,
+    updateStatus,
+    archiveRequest,
+    prayFor,
+  }
 }

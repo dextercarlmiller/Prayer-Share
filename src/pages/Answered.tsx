@@ -4,9 +4,11 @@ import { EmptyState } from '../components/EmptyState'
 import { PageLoader } from '../components/LoadingSpinner'
 import { usePrayerRequests } from '../hooks/usePrayerRequests'
 import { useGroups } from '../hooks/useGroups'
+import { useAuthContext } from '../context/AuthContext'
 
 export function Answered() {
-  const { requests: personal, loading: personalLoading, prayFor, markAnswered, archiveRequest } = usePrayerRequests({ answered: true })
+  const { user } = useAuthContext()
+  const { requests: personal, loading: personalLoading, prayFor, markAnswered, updateStatus, archiveRequest } = usePrayerRequests({ answered: true })
   const { loading: groupsLoading } = useGroups()
 
   const loading = personalLoading || groupsLoading
@@ -35,9 +37,11 @@ export function Answered() {
               <li key={r.id}>
                 <PrayerCard
                   request={r}
+                  currentUserId={user?.id}
                   onPrayFor={prayFor}
                   onMarkAnswered={markAnswered}
                   onArchive={archiveRequest}
+                  onUpdateStatus={updateStatus}
                 />
               </li>
             ))}
