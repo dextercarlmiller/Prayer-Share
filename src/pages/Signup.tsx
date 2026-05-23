@@ -3,6 +3,15 @@ import { Link, Navigate } from 'react-router-dom'
 import { useAuthContext } from '../context/AuthContext'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 
+function validatePassword(password: string): string | null {
+  if (password.length < 12) return 'Password must be at least 12 characters.'
+  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.'
+  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.'
+  if (!/[0-9]/.test(password)) return 'Password must include at least one number.'
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Password must include at least one special character.'
+  return null
+}
+
 export function Signup() {
   const { session, signUp } = useAuthContext()
 
@@ -17,8 +26,9 @@ export function Signup() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.')
+    const pwError = validatePassword(password)
+    if (pwError) {
+      setError(pwError)
       return
     }
     setLoading(true)
@@ -96,9 +106,9 @@ export function Signup() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
-                minLength={8}
+                minLength={12}
                 autoComplete="new-password"
-                placeholder="At least 8 characters"
+                placeholder="At least 12 characters, mixed case, number &amp; symbol"
                 className="w-full rounded-xl border border-amber-200 bg-white px-4 py-3 text-stone-800 placeholder-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
               />
             </div>

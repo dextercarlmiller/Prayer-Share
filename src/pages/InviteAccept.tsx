@@ -15,45 +15,26 @@ export function InviteAccept() {
   useEffect(() => {
     if (!token) { setStatus('invalid'); return }
     if (!session) { setStatus('needs_login'); return }
-    acceptInvite(token, session.user.id)
+    acceptInvite(token)
   }, [token, session])
 
-  async function acceptInvite(inviteToken: string, userId: string) {
-    const { data: invite, error: inviteErr } = await supabase
-      .from('group_invites')
-      .select('*, prayer_groups(name)')
-      .eq('token', inviteToken)
-      .eq('accepted', false)
-      .single()
+  async function acceptInvite(inviteToken: string) {
+    const { data, error } = await supabase.rpc('accept_invite_by_token', { p_token: inviteToken })
 
-    if (inviteErr || !invite) { setStatus('invalid'); return }
+    if (error) { setStatus('error'); return }
 
-    const name = (invite.prayer_groups as { name: string } | null)?.name ?? 'the group'
-    setGroupName(name)
+    const result = data as { status?: string; error?: string; group_name?: string } | null
 
-    // Check if already a member
-    const { data: existing } = await supabase
-      .from('group_members')
-      .select('id')
-      .eq('group_id', invite.group_id)
-      .eq('user_id', userId)
-      .single()
+    if (!result) { setStatus('error'); return }
+    if (result.error === 'not_authenticated') { setStatus('needs_login'); return }
+    if (result.error === 'invalid_or_expired') { setStatus('invalid'); return }
 
-    if (existing) { setStatus('already_member'); return }
+    setGroupName(result.group_name ?? null)
 
-    // Add member
-    const { error: joinErr } = await supabase.from('group_members').insert({
-      group_id: invite.group_id,
-      user_id: userId,
-      role: 'member',
-    })
+    if (result.status === 'already_member') { setStatus('already_member'); return }
+    if (result.status === 'joined') { setStatus('joined'); return }
 
-    if (joinErr) { setStatus('error'); return }
-
-    // Mark invite accepted
-    await supabase.from('group_invites').update({ accepted: true }).eq('token', inviteToken)
-
-    setStatus('joined')
+    setStatus('error')
   }
 
   return (
@@ -131,4 +112,3 @@ export function InviteAccept() {
     </div>
   )
 }
-

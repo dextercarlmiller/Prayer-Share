@@ -97,9 +97,13 @@ export function useGroups() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return { error: new Error('Not signed in') }
 
+    const normalised = email.trim().toLowerCase()
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(normalised)) return { error: new Error('Please enter a valid email address.') }
+
     const { error } = await supabase.from('group_invites').insert({
       group_id: groupId,
-      invited_email: email.trim().toLowerCase(),
+      invited_email: normalised,
       invited_by: user.id,
     })
     return { error }
