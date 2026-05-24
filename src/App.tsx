@@ -14,7 +14,6 @@ import { NewGroup } from './pages/NewGroup'
 import { GroupView } from './pages/GroupView'
 import { GroupSettings } from './pages/GroupSettings'
 import { InviteAccept } from './pages/InviteAccept'
-import { Answered } from './pages/Answered'
 import { Account } from './pages/Account'
 
 function AppRoutes() {
@@ -35,7 +34,7 @@ function AppRoutes() {
         <Route path="/groups/new" element={<ProtectedRoute><NewGroup /></ProtectedRoute>} />
         <Route path="/groups/:id" element={<ProtectedRoute><GroupView /></ProtectedRoute>} />
         <Route path="/groups/:id/settings" element={<ProtectedRoute><GroupSettings /></ProtectedRoute>} />
-        <Route path="/answered" element={<ProtectedRoute><Answered /></ProtectedRoute>} />
+        <Route path="/answered" element={<Navigate to="/account" replace />} />
         <Route path="/account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
 
         <Route path="*" element={<Navigate to="/" replace />} />

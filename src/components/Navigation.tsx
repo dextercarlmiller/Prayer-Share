@@ -22,15 +22,6 @@ const tabs = [
     ),
   },
   {
-    to: '/answered',
-    label: 'Answered',
-    icon: (active: boolean) => (
-      <svg className="h-5 w-5" viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-      </svg>
-    ),
-  },
-  {
     to: '/account',
     label: 'Account',
     icon: (active: boolean) => (

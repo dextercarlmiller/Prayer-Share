@@ -110,7 +110,7 @@ export function useAuth() {
     return { error }
   }
 
-  async function updateProfile(updates: Partial<Pick<Profile, 'first_name'>>) {
+  async function updateProfile(updates: Partial<Pick<Profile, 'first_name' | 'last_name'>>) {
     if (!state.user) return { error: new Error('Not signed in') }
     try {
       const { error } = await supabase
@@ -124,5 +124,16 @@ export function useAuth() {
     }
   }
 
-  return { ...state, signUp, signIn, signOut, resetPassword, updateProfile }
+  async function deleteAccount() {
+    if (!state.user) return { error: new Error('Not signed in') }
+    try {
+      const { error } = await supabase.rpc('delete_user_account')
+      if (!error) await supabase.auth.signOut()
+      return { error }
+    } catch (err) {
+      return { error: err instanceof Error ? err : new Error('Network error') }
+    }
+  }
+
+  return { ...state, signUp, signIn, signOut, resetPassword, updateProfile, deleteAccount }
 }
