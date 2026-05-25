@@ -12,7 +12,8 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<{ error: Error | null }>
-  updateProfile: (updates: Partial<Pick<Profile, 'first_name'>>) => Promise<{ error: Error | null }>
+  updateProfile: (updates: Partial<Pick<Profile, 'first_name' | 'last_name'>>) => Promise<{ error: Error | null }>
+  deleteAccount: () => Promise<{ error: Error | null }>
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)
